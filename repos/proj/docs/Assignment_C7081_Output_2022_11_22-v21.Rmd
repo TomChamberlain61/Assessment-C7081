@@ -1,0 +1,1707 @@
+---
+title: "22294500 C7081_Assignment_ATC_2022_11_22_v20"
+author: "A T Chamberlain"
+date: "2022-11-21"
+output: word_document
+---
+
+
+
+```{r housekeeping01, echo=FALSE, message=FALSE, warning=FALSE}
+
+rm(list = ls())
+
+setwd("C:/ATC_data/Harper_adams PGCert/C7081/C7081-Assignment")
+PM10raw = read.table("PM10_raw.txt", header = T)
+attach(PM10raw)
+
+# load all required libraries as needed on end-user machine 
+
+if(!require(lubridate)) install.packages("lubridate", repos="http://cran.us.r-project.org")
+library(lubridate)
+if(!require(tidyr)) install.packages("tidyr", repos="http://cran.us.r-project.org")
+library(tidyr)
+if(!require(Metrics)) install.packages("Metrics", repos="http://cran.us.r-project.org")
+library(Metrics)
+if(!require(leaps)) install.packages("leaps", repos="http://cran.us.r-project.org")
+library(leaps)
+if(!require(glmnet)) install.packages("glmnet")
+library(glmnet)
+if(!require(pls)) install.packages("pls")
+library(pls)
+if(!require(gam))  install.packages("gam")
+library(gam)
+if(!require(MASS))  install.packages("MASS")
+library(MASS)
+if(!require(class)) install.packages("class")
+library(class)
+if(!require(tree)) install.packages("tree")
+library(tree)
+if(!require(ISLR2)) install.packages("ISLR2")
+library(ISLR2)
+if(!require(randomForest)) install.packages("randomForest")
+library(randomForest)
+if(!require(gbm)) install.packages("gbm")
+library(gbm)
+if(!require(BART)) install.packages("BART")
+library(BART)
+if(!require(e1071)) install.packages("e1071")
+library(e1071)
+
+## data-frame for storing the results 
+##  create vectors 
+method = character(40)
+dataset = character(40)
+variableset = character(40)
+assessment = character(40)
+value = rep(0, times = 40)
+
+## make a data frame for the results 
+results = data.frame(method,dataset,variableset, assessment,value)
+
+```
+
+# Title
+An appraisal of the ability of a range of statistical learning algorithms to model air quality (PM10) in Sweden from meteorological and traffic data.  
+
+# GitHub link
+
+https://github.com/TomChamberlain61/Assessment-C7081
+
+# Background 
+
+Particulate matter pollution is a growing global problem resulting in rising levels of ill health and mortality. There are two major sources of particulate pollution. Firstly open fires and burning wood creates small particles (typically under 2.5 microns and referred to as PM2.5). Problems are seen when wood fuel and open fires are used for heating and cooking and are recorded predominately in developing countries. The second source is from vehicle traffic - predominantly road. Pollution particles are larger (2.5 to 10 microns)and do not disperse so widely in the environment. 
+
+Particulate pollutants are typically measured as PM2.5 which includes are particles in the range 0.3 - 2.5 microns and as PM10 which refers to particles in the range 0.3 to 10 micron. Devices to measure particulate pollutant concentrations (microgram per cubic meter) are expensive and require regular attention to maintain consistent performance and to collect data. There is therefore an interest in predicting particulate pollution concentrations from meteorological and traffic data as these are easier and cheaper to obtain.  
+
+Aldrin and Haff (2005) used Generalised Additive Modelling to model PM10 concentrates from meteorological and traffic data.
+Other researchers have used a rage of traditional and more modern modelling algorithms - see Aldrin and Haff (2005) but they have not been formally compared and some more modern techniques (eg BART - Sparapani et al, 2021) have not been considered. 
+
+# Objective 
+
+The objective of this study was to apply a range of statsical learning techniques as described by James et al (2021) to a publicly available subset of the data used by Aldrin and Haff (2005). Performance will be formally assessed using RMSE and classification error estimations as well as for transparency, parsimony and simplicity.  
+
+# Data 
+
+A publically available subset of the data used by Aldrin and Haff (2005) were obtained from http://lib.stat.cmu.edu/datasets/PM10.dat and consisted of 500 observations. The original data were collected by the Norwegian Public Roads Administration over 4 sites in Oslo but only one is site (Alnabru) is present in the data subset available. The original data were collected between October 2001 and August 2003. 
+
+The data available are as follows:
+
+Response variable
+
+* hourly values of the logarithm of the concentration of PM10 particles 
+
+Predictor variables
+
+* logarithm of the number of cars per hour
+* temperature 2 meter above ground (degree C)
+* wind speed (meters/second)
+* the temperature difference between 25 and 2 meters above ground (degree C)
+* wind direction (degrees between 0 and 360)
+* hour of day
+* day number from October 1. 2001. 
+
+The original variable is continuously distributed which limits the types of analysis techniques that can be used. WHO (2021)defines a high concentration as being over 45 micrograms per cubic meter and this threshold will be used to define a categorical variable for pollution risk which allows a range of categorical analysis techniques to be explored. 
+
+### Initial Data frame structure 
+
+```{r raw structure}
+names(PM10raw)
+```
+
+# MATERIALS AND METHODS
+
+## EDA
+
+### Data distributions, transformations and derivations
+
+Data distributions were assessed using histograms and Gaussian distribution was formally assessed using the Shapiro-Wilks test. logCarNumbers looked skewed but simple power transformations did not notable improve the Shapiro-Wilks statistic. By contrast the distribution of windSpeed was improved by taking the square root and this transformed variable was added to the data-frame. 
+
+Distribution by dayNumber (days since 1 Oct 2001) was unusual and worthy of note (see plot below)
+
+```{r hist_dayNumber, echo=FALSE}
+hist(dayNumber, main = "Distribution of number of days since 1Oct2022", breaks = 40) 
+```
+
+The data subset seems to cover the winter periods of two successive years. This may create some problems in further analysis as the data are a time-series set as they are on successive days. There is a risk that some data variables will be highly correlated over time such that the best predictor for day(t+1) is the data for day(t). If training and test data sets are created by selecting every other value they will be very similar and the 'test' subset will not be a true, independent set. For this reason the training set was taken as the first 250 (approx) values and the test set the second 250-ish values. 
+
+The variable windDirection required attention. In its raw state direction was represented as degrees on the compass. Although it seems continuous it has the odd characteristic that the difference between 1 and 2 degrees is the same as the difference between 360 and 1 degree. To overcome this a new factorial variable call windRose was created with windDirection ranging from 45 to 135 degrees classed as E and so forth. 
+
+Similarly dayNumber can be improved. Initially the dayNumber was transformed into a calendar date and from this the month and season (Dec,Jan,Feb = Winter etc) was derived. Day of the week (Monday, etc) was derived from the data and this was classified as Weekend (Sat, Sun) or weekday. 
+
+Further investigation of how logPM10 varied with day of the week showed that PM10 was lowest on Mondays rather than at the weekend suggesting there may be a possible lag. Successive ANOVA analyses showed that splitting out Sunday and Monday from the other days has the highest significance of any split (F = 34.25, df = 1,498) and a new categorical variable was set up to reflect this. 
+
+```{r derive_vars, echo=FALSE}
+windSpeedSqrt = (windSpeed)^0.5
+PM10raw = cbind(PM10raw, windSpeedSqrt)
+
+windRose = rep("A", 500)
+for (i in 1:500) {
+  if ((windDirection[i] > (90 - 45)) && (windDirection[i] <= (90 + 45))) {
+    windRose[i] = "E"
+  }
+  if ((windDirection[i] > (180 - 45)) && (windDirection[i] <= (180 + 45))) {
+    windRose[i] = "S"
+  }
+  if ((windDirection[i] > (270 - 45)) && (windDirection[i] <= (270 + 45))) {
+    windRose[i] = "W"
+  }
+  if ((windDirection[i] <= 45) || (windDirection[i] > (270 + 45))) {
+    windRose[i] = "N"
+  }
+}
+
+PM10raw = cbind(PM10raw, windRose)
+PM10raw$windRose = factor(PM10raw$windRose)
+
+startDate = dmy("01/10/2001")
+
+dayDate = startDate + dayNumber
+
+day = wday(dayDate, label = T, abbr = T, week_start = 1)
+
+
+# create weekday
+weekDay = factor(day,
+  levels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"),
+  labels = c("Weekday", "Weekday", "Weekday", "Weekday", "Weekday", "Weekend", "Weekend")
+)
+
+# month of year
+month = month(dayDate, label = T, abbr = T)
+
+# create seasons
+season = factor(month,
+  levels = c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"),
+  labels = c("Win", "Win", "Spr", "Spr", "Spr", "Sum", "Sum", "Sum", "Aut", "Aut", "Aut", "Win")
+)
+
+# add data to data frame
+PM10raw = cbind(PM10raw, day, dayDate, month, season, weekDay)
+
+# year
+year = year(dayDate)
+monthNum = month(dayDate)
+dayOfWeek = wday(dayDate)
+day = wday(dayDate, label = T)
+
+# derive a unique month to help with plots etc.
+trialMonth = (12 * (year - 2001)) + monthNum
+
+# add data to data frame
+PM10raw = cbind(PM10raw, year, monthNum, day, dayOfWeek, trialMonth)
+# names(PM10raw)
+
+```
+
+```{r dayofweek, echo=FALSE}
+
+# calc means by day of week
+aggregate(
+  x = logPM10,
+  by = list(treatment = day),
+  FUN = mean
+)
+
+aov.fitday = aov(logPM10 ~ day)
+
+plot(day, logPM10,
+  main = "Day of the week",
+  sub = "ANOVA, F 6.99 on 6 , 493 df. p = < 0.001",
+  ylab = "log(PM10)",
+  xlab = "Day of the week"
+)
+
+```
+
+```{r calculations_2, echo=FALSE}
+splitDay2 = factor(day,
+  levels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"),
+  labels = c("Low", "High", "High", "High", "High", "High", "Low")
+  )
+  
+# Changing the labels High/Low to different combinations shows optimal split to maximise F stat value is with Monday and Sunday in the lows
+splitDaySunMon = splitDay2
+PM10raw = cbind(PM10raw, splitDaySunMon)
+
+```
+
+####
+
+The original dataset contained variables for temperature at 2m and the difference between temperatures at 2m and 25m but not the raw data for temperature at 25m. This seems rather inconsistent so the 25m temperature was derived and added to the data frame. 
+
+```{r derive_temp25, include=FALSE}
+temp25m = temp2m + temp2mcf25m
+# bind and tidy up
+PM10raw = cbind(PM10raw, temp25m)
+## tidy up
+rm(temp25m)
+```
+### Data visualisation
+
+Pairs analysis is too large and complex across all the variables that we now have, but can be visualised for the first nine variables.
+
+
+```{r pairs, echo=FALSE}
+
+pairs(PM10raw[1:9])
+```
+
+However even is visualisation is difficult to interpret so will look at numerical correlations to 3 dp. 
+
+```{r cor, echo=FALSE}
+round(cor(PM10raw[, unlist(lapply(PM10raw, is.numeric))]), 2)
+```
+
+Several variables are correlated. logCarNumbers is correlated with time of day (r=0.56) because at some repeatable times of the day the roads are busier. Temperature at 2m and at 25m are highly correlated (r=0.99) indicating that we do not need both in any future model. The temperature difference is correlated with logCarNumbers (r=-0.35) and temperature at 2m (r=-0.36). Other correlations are artifacts of the derivation of new variables such as dayNumber being correlated with year (r=0.89)
+
+Finally look at some of the regression plots for logPM10 against possible explanatory variables. 
+
+```{r simple regressions, echo=FALSE}
+lm.fitlogCarNumbers = lm(logPM10 ~ logCarNumbers)
+plot(logCarNumbers, logPM10,
+  main = "log(Car Numbers)",
+  ylab = "log(PM10)",
+  xlab = "Log (cars per hour)",
+  sub = "Regression, p<0.0001, adjR2 = 0.12"
+)
+abline(lm.fitlogCarNumbers, lty = 1, col = "blue", lwd = 3)
+
+lm.fittemp2m = lm(logPM10 ~ temp2m)
+plot(temp2m, logPM10,
+  main = "Temperature at 2m ",
+  sub = "Regression, p=0.302, adjR2 < 0.001",
+  ylab = "log(PM10)",
+  xlab = "'C"
+)
+abline(lm.fittemp2m, lty = 1, col = "blue", lwd = 3)
+
+lm.fitwindSpeed = lm(logPM10 ~ windSpeed)
+plot(windSpeed, logPM10,
+  main = "wind Speed",
+  sub = "Regression, F 10.7 on 1 , 498 df. p < 0.001, adjR2 = 0.02",
+  ylab = "log(PM10)",
+  xlab = "m/sec"
+)
+abline(lm.fitwindSpeed, lty = 1, col = "blue", lwd = 3)
+
+
+lm.fittemp2mcf25m = lm(logPM10 ~ temp2mcf25m)
+plot(temp2mcf25m, logPM10,
+  main = "Temperature difference between 2m and 25m height",
+  sub = "Regression, F 2.6 on 1 , 498 df. p < 0.11, adjR2 = 0.003",
+  ylab = "log(PM10)",
+  xlab = "'C diff"
+)
+abline(lm.fittemp2mcf25m, lty = 1, col = "blue", lwd = 3)
+
+lm.fithourofDaycfCarNumbers = lm(logCarNumbers ~ hourofDay)
+plot(hourofDay, logCarNumbers,
+  main = "Hour of Day",
+  sub = "Regression, F 221.8 on 1 , 498 df. p < 0.001, adjR2 = 0.31",
+  ylab = "log(Car numbers)",
+  xlab = "Hour of day"
+)
+abline(lm.fithourofDaycfCarNumbers, lty = 1, col = "blue", lwd = 3)
+
+
+lm.fitwindSpeedSqrt = lm(logPM10 ~ windSpeedSqrt)
+plot(windSpeedSqrt, logPM10,
+  main = "Sqrt of Wind Speed",
+  sub = "Regression, F 15.61 on 1 , 498 df. p < 0.001, adjR2 = 0.03",
+  ylab = "log(PM10)",
+  xlab = "Sqrt of Wind Speed (m/sec)"
+)
+abline(lm.fitwindSpeed, lty = 1, col = "blue", lwd = 3)
+
+```
+
+### Conclusions from initial EDA and visualisation 
+
+* regression plots identify very few outliers - suggesting that data has been cleaned by the original authors. 
+* There are a small number of moderate correlations between variables (p<0.05) but none appear strong enough to indicate that a simple model will suffice. 
+* Single component regressions are generally poor with very small amounts of the variance accounted for in the adjRsqr. 
+
+```{r housekeeping_2, include=FALSE}
+# remove simple variables - many of these are now bound in the data frame
+rm(day, dayDate, dayOfWeek, i, month, monthNum, season, splitDay2, startDate, temp, temp25m, winsSpeedSqrt, year)
+## have a duplicated column so regressions etc will not run
+PM10raw = PM10raw[, !duplicated(colnames(PM10raw))]
+```
+
+
+
+# Assessment of a variety of Statistical Learning techniques
+
+This section will explore the use of traditional and newer statistical techniques to model the particulate pollution concentration both as a continuous and as a categorical variable. 
+
+## Simple linear regressions
+
+### Fit all explantory variables 
+
+
+
+```{r lmEverything, echo=FALSE}
+lm.fitEverything = lm(logPM10 ~ ., data = PM10raw)
+# summary(lm.fitEverything)
+rmse(logPM10, lm.fitEverything$fitted.values)
+
+analysisNumber = 0 
+results$method[analysisNumber] = "Simple multiple regression"
+results$dataset[analysisNumber] = "all data"
+results$variableset[analysisNumber] = "All variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.710
+```
+
+
+```{r lmEverything_g, echo=FALSE}
+par(mfrow = c(2, 2))
+plot(lm.fitEverything)
+```
+
+The regression has an adj R2 of 0.324 and is a highly significant fit (F = 10.55 on 25,474 df p < 0.0001). The residuals plot shows they are tightly clustered around the fitted line which is approx horizontal and they look to be normally distributed and consistent across the range of observations. One value has a very high leverage; this is related to a Temp2m value of was 21.9 which is high but not ridiculous so do not reject. 
+
+The RMSE for this regression is 0.710 log units. The IQR for logPM10 is 1.17 so the error is 60% of the IQR indicating that this is not a very useful model. However it does give a baseline RMSE against which other techniques can be compared. 
+
+The next section will look at several other simple regressions and determine the RMSE for each so that comparisons can start to be made. The subsequent section will look at the risk of the models being over fitted by using at training and test dataset. 
+
+### Original variables 
+
+The variables used were logCarNumbers, temp2m, windSpeed, temp2mcf25m, windDirection, hourofDay and dayNumber.
+
+```{r lm_original, include=FALSE}
+lm.fitOriginalVars = lm(logPM10 ~ logCarNumbers + temp2m + windSpeed + temp2mcf25m + windDirection + hourofDay + dayNumber, data = PM10raw)
+summary(lm.fitOriginalVars)
+rmse(logPM10, lm.fitOriginalVars$fitted.values)
+
+analysisNumber = 1 
+results$method[analysisNumber] = "Simple multiple regression"
+results$dataset[analysisNumber] = "all data"
+results$variableset[analysisNumber] = "Original variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.803
+
+```
+Although the model’s fit was highly significant (F=15.06, df = 492,7, p<0.001) the adj the model adj R2 was lower at 0.1765, and the RMSE had risen to 0.803. In general the models are highly significant even when they do NOT have good RMSE values -the latter will be reported more in subsequent analyses.
+
+### Transformed variables 
+
+The variables used were logCarNumbers, temp2m, temp25m, windSpeedSqrt, temp2mcf25m, windDirection, hourofDay, dayNumber.
+
+```{r lm_transformed, include=FALSE}
+lm.fitOriginalTransVars = lm(logPM10 ~ logCarNumbers + temp2m + temp25m + windSpeedSqrt + temp2mcf25m + windDirection + hourofDay + dayNumber, data = PM10raw)
+summary(lm.fitOriginalTransVars)
+rmse(logPM10, lm.fitOriginalTransVars$fitted.values)
+analysisNumber = 2 
+results$method[analysisNumber] = "Simple multiple regression"
+results$dataset[analysisNumber] = "all data"
+results$variableset[analysisNumber] = "Transformed variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.798
+```
+
+The model's adj R2 is 0.1876, and the RMSE 0.798 which is still below the model that included every variable. 
+
+
+
+### Manually selected variables - based on correlations and scientific background of the required models
+
+The variables used were logCarNumbers, temp2m, temp25m, windSpeedSqrt, temp2mcf25m, windRose, hourofDay, season and SplitDaySunMon.
+
+```{r lm_chosen, include=FALSE}
+lm.fitChosenVars = lm(logPM10 ~ logCarNumbers + temp2m + temp25m + windSpeedSqrt + temp2mcf25m + windRose + hourofDay + season + splitDaySunMon, data = PM10raw)
+summary(lm.fitChosenVars)
+rmse(logPM10, lm.fitChosenVars$fitted.values)
+analysisNumber = 3 
+results$method[analysisNumber] = "Simple multiple regression"
+results$dataset[analysisNumber] = "all data"
+results$variableset[analysisNumber] = "Manually selected variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.736
+
+```
+
+The model's adj R2 is 0.3089, and the RMSE 0.736 which is better but still below the model that included every variable.
+
+ANOVA was used to compare the five models developed so far  
+* logCarNumbers
+* Original
+* TransformedVars
+* ChosenVars
+* Everything
+
+```{r ANOVA_1, include=FALSE}
+anova(lm.fitlogCarNumbers, lm.fitOriginalVars, lm.fitOriginalTransVars, lm.fitChosenVars, lm.fitEverything)
+```
+
+The Original model is better than CarNumbers alone (p<0.001), adding the transformed variables does not improve the model. Moving to chosenVars is an improvement (p<0.0001)and is using everything (p=0.0008). Initial data visualizations does not suggest that higher powers (quad, cubic etc) of any of the variables will improve the models so none were explored. 
+
+#### Model training
+
+The above models were fitted to the entire data set and there is a risk that they are dataset-specific and are over fitted. The are various methods to avoid this such as Kfold and test-train splits. Some algorithms include a Kfold option; where this is not a feature a Test:train approach was used. As can be seen in the accompanying figure the trialMonth splits into two clusters. Data collected before month 20 were used as the training dataset, after month 20 were the test set. This results in 254 observations in the training data set and 246 in the test set. The test dataset contained one observation where season was classified as summer, there were no summer classifications in the training set. The 'summer' observation was for 1 June when Spring ended 31 May; this observation was recoded as Spring and 31May. 
+
+```{r split data, echo=FALSE}
+# summary(trialMonth) # min 11 max 30
+par(mfrow = c(1, 1))
+hist(trialMonth, breaks = 19)
+# Data is in two clusters over time - one cluster is under 18 months the other over 22 months
+# table(trialMonth)
+# will split by trial month with <20 being training and >20 being test
+
+train = (trialMonth < 20)
+
+PM10Train = PM10raw[train, ]
+PM10Test = PM10raw[!train, ]
+```
+
+## Best subset linear regression 
+
+With 21 variables in any possible model there are over four million possible combinations which took too long on my computer (over 10 hours). A smaller set of 9 variables was therefore chosen. 
+
+
+```{r best subset, echo=FALSE, message=FALSE, warning=FALSE}
+lm.fitBestSubsetChosen = regsubsets(logPM10 ~ logCarNumbers + temp2m + windSpeedSqrt + temp2mcf25m + windRose + hourofDay + season + weekDay,
+  data = PM10Train, nvmax = 15
+)
+## flags up error message that 1 linear dependency found
+reg.summary = summary(lm.fitBestSubsetChosen)
+par(mfrow = c(1, 2))
+
+plot(reg.summary$rss,
+  xlab = "Number of Variables",
+  ylab = "RSS ",
+  main = "Performance of best subset regression",
+  type = "l"
+)
+plot(reg.summary$adjr2,
+  xlab = "Number of Variables",
+  ylab = "Adjusted RSq",
+  main = "Performance of best subset regression",
+  type = "l"
+)
+
+par(mfrow = c(1, 1))
+
+# reg.summary$which - output too verbose 
+
+```
+
+There is no maximal adj R2 but gains tend to slow after about 7 or 8 components. Model selected (p=8) is logCarNumbers, temp2m, windSpeedSqrt, temp2mcf25m, windRose, hourofDay, season and weekDay. This is a similar composition to fitChosenVars above. When running a train/test procedure need to do ALL Of the analyses on the Train set and then apply to the test set rather than use the model fitted to ALL of the data. 
+
+```{r echo=FALSE, warning=FALSE}
+lm.fitBSSchosen9Train = regsubsets(logPM10 ~ logCarNumbers + temp2m + temp2mcf25m + hourofDay + windSpeedSqrt + windRose + season + temp25m + weekDay,
+  data = PM10Train, nvmax = 10)
+
+reg.summary = summary(lm.fitBSSchosen9Train)
+
+par(mfrow = c(1, 2))
+
+plot(reg.summary$rss,
+  xlab = "Number of Variables",
+  ylab = "RSS ",
+  main = "Performance of best subset regression on 9 chosen variable",
+  type = "b"
+)
+plot(reg.summary$adjr2,
+  xlab = "Number of Variables",
+  ylab = "Adjusted RSq",
+  type = "b"
+)
+
+which.max(reg.summary$adjr2)
+
+reg.summary$adjr2[8]
+
+points(8, reg.summary$adjr2[8],
+  col = "red", cex = 2, pch = 20
+)
+
+ 
+
+## reg.summary$which
+
+```
+
+Rate of gain in R2 falls off after 8 variables (adj R2 at p=8 is 0.307 which is highest value) and suggests an 8 component model will be useful. Eight component model is logCarNumbers, hour of day, windSpeedSqrt, windRose and season. 2 are continuous, 2 are categorical (hourofDay is ordinal).
+
+## Forward stepwise regression 
+
+Compare with forward and backward stepwise regression with entire set. Use all of data set as still looking to find best LM. The plot of RSS against model size shows the change in fall in RSS starts to diminish after about p=13. This model is logCarNumbers+ temp2m + windSpeed + windSpeedSqrt + windRose + day + month + year season. The RMSE for this model when applied all of the data was 0.711. The model was then applied to the Training set only and assessed on the Test set and the RMSE rose to 0.781.  
+
+```{r echo=FALSE, warning=FALSE}
+
+set.seed(1) # use this liberally to ensure repeatability between sessions and in assessment script
+
+## have a duplicated column so regressions etc will not run
+PM10Train = PM10Train[, !duplicated(colnames(PM10Train))]
+
+lm.fitSWforwardAll = regsubsets(logPM10 ~ ., data = PM10Train, nvmax = 22, method = "forward")
+# summary(lm.fitSWforwardAll)
+
+## plot RRS to assess 
+
+plot(lm.fitSWforwardAll$rss,
+     ylab = "RRS",
+       main = "Performance of forward stepwise regression")
+
+# coef(lm.fitSWforwardAll, 13)
+
+lm.fitSWforward13 = lm(logPM10 ~ logCarNumbers + temp2m + windSpeed + windSpeedSqrt + windRose + day + month + year + season, data = PM10raw)
+# summary(lm.fitSWforward13)
+rmse(PM10raw$logPM10, lm.fitSWforward13$fitted.values)
+
+## now just apply to the training set  
+
+lm.fitBSSforward13Train = lm(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season,
+  data = PM10Train
+)
+# summary(lm.fitBSSforward13Train)
+
+#yhat = predict(lm.fitchosen9Train, newdata = PM10Test)
+
+# this throws an error message as one Summer in test and zero in train
+# will try and drop
+
+# use fix(PM10Test) ## opens up a spreadsheet format where can identify the issue 
+PM10Test$season[213] = "Spr"
+PM10Test$month[213] = "May"
+PM10Test$monthNum[213] = 5
+
+## season was set to summer and date was 1 June - changed to Spr which runs to 31 May.
+
+yhat = predict(lm.fitBSSforward13Train, newdata = PM10Test)
+# summary(yhat)
+sqrt(mean((yhat - PM10Test$logPM10)^2))
+analysisNumber = 4 
+results$method[analysisNumber] = "Forward stepwise multiple regression"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "All variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.781
+
+```
+
+## Backward stepwise regression 
+
+Backward stepwise regression was run on all variables available and RSS plotted against number of variables. The pattern of decline in RSS had a  slightly different pattern but again improvement falls off after 13 components. The chosen model is logCarNumbers, temp2m, windDirection, hourofDay, WindSpeedSqrt, windRose, day and month. The RMSE when this model was applied to the entire data set was 0.716, when the model was trained then tested the RMSE rose to 0.8184. 
+
+```{r echo=FALSE, warning=FALSE}
+
+set.seed(1) # use this liberally to ensure repeatability between sessions and in assessment script
+PM10raw = PM10raw[, !duplicated(colnames(PM10raw))]
+
+lm.fitSWbackwardAll = regsubsets(logPM10 ~ ., data = PM10Train, nvmax = 22, method = "backward")
+# summary(lm.fitSWbackwardAll)
+
+plot(lm.fitSWbackwardAll$rss,      
+     ylab = "RRS",
+     main = "Performance of backward stepwise regression")
+     
+# slightly different pattern but again improvement falls off after 13 components
+
+# coef(lm.fitSWbackwardAll, 13)
+
+## model is : logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt  + windRose + day +  month
+
+lm.fitSWbackward13 = lm(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month, data = PM10Train)
+# summary(lm.fitSWbackward13)
+
+rmse(PM10Test$logPM10, lm.fitSWbackward13$fitted.values)
+
+yhat = predict(lm.fitSWbackward13 , newdata = PM10Test)
+# summary(yhat)
+sqrt(mean((yhat - PM10Test$logPM10)^2))
+analysisNumber = 5 
+results$method[analysisNumber] = "Backward stepwise multiple regression"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "All variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.8184
+```
+
+## Ridge regression 
+
+### All variables 
+
+Ridge regression was applied with a grid of Lambda values. The model was developed with all variables using the Training set and validated with ten fold cross validation over the range of Lambda values. The best lambda value was 0.192 and a model using this value was used to predict values in the Test data set. Performance was assessed using the RMSE which was 0.7032. The model derived used  all predictors so should be compared to lm.fitEverything where RMSE was 0.710 so this was a marginal improvement.    
+
+```{r echo=FALSE}
+## set up y variable and x matrix
+x = model.matrix(logPM10 ~ ., PM10Train)[, -1]
+y = PM10Train$logPM10
+
+## make a grid of lambda values
+grid = 10^seq(10, -2, length = 100)
+## run ridge analysis
+
+ridge.all = glmnet(x, y, alpha = 0, lambda = grid)
+## 0.07 seconds
+
+# how to find the best value of lambda
+# get cross validation to work then vary lambda
+
+## cross validation
+## set up train and test y variable and x matrix
+x.Train = model.matrix(logPM10 ~ ., PM10Train)[, -1]
+y.Train = PM10Train$logPM10
+x.Test = model.matrix(logPM10 ~ ., PM10Test)[, -1]
+y.Test = PM10Test$logPM10
+
+## run 10 fold cross validation
+set.seed(1)
+cv.out = cv.glmnet(x.Train, y.Train, alpha = 0, nfolds = 10)
+par(mfrow = c(1, 1))
+plot(cv.out)
+
+bestlam = cv.out$lambda.min
+bestlam
+
+## help(cv.glmnet)
+
+# best lambda value is 0.192
+
+ridge.pred = predict(ridge.all, s = bestlam, newx = x.Test)
+
+# calc RMSE
+sqrt(mean((ridge.pred - y.Test)^2))
+
+analysisNumber = 6
+results$method[analysisNumber] = "Ridge regression"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "All variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.6994
+
+```
+
+### Chosen variables 
+
+Ridge regression does not select and rank variables so repeat with chosen and SW.forward variables sets in case the full set of variables caused too much over-fitting. The optimal lambda value was 0.1103 and the RMSE when applied to the test set was 0.6994 which is a marginal improvement.  
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+## cross validation for chosen variables : logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season
+## set up y variable and x matrix
+x.Train = model.matrix(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season, PM10Train)[, -1]
+# y.Train = PM10Train$logPM10
+x.Test = model.matrix(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season, PM10Test)[, -1]
+# y.Test = PM10Test$logPM10
+
+ridge.chosen9 = glmnet(x, y, alpha = 0, lambda = grid)
+
+## run 10 fold cross validation
+set.seed(1)
+cv.out = cv.glmnet(x.Train, y.Train, alpha = 0, nfolds = 10)
+par(mfrow = c(1, 1))
+plot(cv.out)
+
+bestlam = cv.out$lambda.min
+bestlam
+
+# best lambda value is 0.1103
+
+ridge.pred = predict(ridge.chosen9, s = bestlam, newx = x)
+
+# calc RMSE
+sqrt(mean((ridge.pred - y.Test)^2))
+
+analysisNumber = 7
+results$method[analysisNumber] = "Ridge regression"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.9963
+
+```
+### Stepwise Forward variables 
+
+The RMSE for the test data set was 0.6977 which is again a (very) marginal improvement. With such marginal gains models should be selected for the quality of their input variables; what is the error in obtaining the data - for example is measuring temperature and windspeed.   
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+x.Train = model.matrix(logPM10 ~ logCarNumbers + temp2m + windSpeed + windSpeedSqrt + windRose + day + month + year + season, PM10Train)[, -1]
+# y.Train = PM10Train$logPM10
+x.Test = model.matrix(logPM10 ~ logCarNumbers + temp2m + windSpeed + windSpeedSqrt + windRose + day + month + year + season, PM10Test)[, -1]
+# y.Test = PM10Test$logPM10
+
+
+ridge.SWForward = glmnet(x, y, alpha = 0, lambda = grid)
+
+## run 10 fold cross validation
+set.seed(1)
+cv.out = cv.glmnet(x.Train, y.Train, alpha = 0, nfolds = 10)
+par(mfrow = c(1, 1))
+plot(cv.out)
+
+bestlam = cv.out$lambda.min
+bestlam
+# best lambda value is 0.0631
+
+ridge.pred = predict(ridge.chosen9, s = bestlam, newx = x)
+
+# calc RMSE
+sqrt(mean((ridge.pred - y.Test)^2))
+analysisNumber = 8
+results$method[analysisNumber] = "Ridge regression"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Stepwise forward variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.9963
+```
+## Lasso regression 
+
+Again the first model uses all of the variables and is trained and then tested. The resultant RMSE was 0.8219, for the chosen variables the RMSE was 1.103 and for the SWForward variable set it was also 1.103.   
+
+```{r echo=FALSE, warning=FALSE}
+
+## start with everything - just about repeats but with alpha = 1 ####
+
+## set up y variable and x matrix - again - with all variables
+x.Train = model.matrix(logPM10 ~ ., PM10Train)[, -1]
+y.Train = PM10Train$logPM10
+x.Test = model.matrix(logPM10 ~ ., PM10Test)[, -1]
+y.Test = PM10Test$logPM10
+
+lasso.all = glmnet(x, y, alpha = 1, lambda = grid)
+
+## run 10 fold cross validation
+set.seed(1)
+cv.out = cv.glmnet(x.Train, y.Train, alpha = 1, nfolds = 10)
+par(mfrow = c(1, 1))
+plot(cv.out)
+
+bestlam = cv.out$lambda.min
+bestlam
+
+
+lasso.pred = predict(lasso.all, s = bestlam, newx = x.Test)
+
+# calc RMSE
+sqrt(mean((lasso.pred - y.Test)^2))
+analysisNumber = 9
+results$method[analysisNumber] = "Lasso regression"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "All variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.8219
+
+```
+
+```{r echo=FALSE, warning=FALSE}
+
+## Chosen 9  #####
+
+## cross validation for SWforward variables : logPM10 ~ :   logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season ####
+## set up y variable and x matrix
+x.Train = model.matrix(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season, PM10Train)[, -1]
+# y.Train = PM10Train$logPM10
+x.Test = model.matrix(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season, PM10Test)[, -1]
+# y.Test = PM10Test$logPM10
+
+lasso.chosen9 = glmnet(x, y, alpha = 1, lambda = grid)
+
+## run 10 fold cross validation
+set.seed(1)
+cv.out = cv.glmnet(x.Train, y.Train, alpha = 1, nfolds = 10)
+par(mfrow = c(1, 1))
+plot(cv.out)
+
+bestlam = cv.out$lambda.min
+bestlam
+# best lambda value is 0.00874
+
+lasso.pred = predict(lasso.chosen9, s = bestlam, newx = x)
+
+# calc RMSE
+sqrt(mean((ridge.pred - y.Test)^2))
+analysisNumber = 10
+results$method[analysisNumber] = "Lasso regression"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "chosen 9 stepwise forward variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 1.0068
+
+## SWforward #####
+
+### Model with option to use all available variables.
+```
+
+Initially run the model on all the variables and applied to the training data set. This carries out ten fold cross-validation and a plot of the MSEP against number of components shows a clear low point with three components. Applying this model to the Test dataset gives a RMSE of 0.7074.     
+
+
+```{r echo=FALSE, warning=FALSE}
+y.Test = PM10Train$logPM10
+
+## have an initial look at the model
+
+set.seed(1)
+pls.all = plsr(logPM10 ~ ., data = PM10Train, scale = TRUE, validation = "CV")
+# summary(pls.all)
+
+validationplot(pls.all, val.type = "MSEP")
+
+# minimum is at M = 3
+
+pls.pred = predict(pls.all, newx = x, ncomp = 3)
+# calc RMSE
+sqrt(mean((pls.pred - y.Train)^2))
+analysisNumber = 11
+results$method[analysisNumber] = "Partial least squares regression"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "All variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.7074
+
+```
+
+### Variable set identified with stepwise forward algorithm 
+
+With this model the minimum MSEP is not so clear but assume it is at M = 5. When this model is applied to the Test data set the RMSE is 0.7106 so very similar and fewer variables involved. 
+
+```{r echo=FALSE, warning=FALSE}
+## cross validation for SWforward variables : logPM10 ~ :   logCarNumbers + temp2m + windSpeed + windSpeedSqrt + windRose + day + month + year + season ####
+## set up y variable and x matrix
+x.Train = model.matrix(logPM10 ~ logCarNumbers + temp2m + windSpeed + windSpeedSqrt + windRose + day + month + year + season, PM10Train)[, -1]
+y.Train = PM10Train$logPM10
+x.Test = model.matrix(logPM10 ~ logCarNumbers + temp2m + windSpeed + windSpeedSqrt + windRose + day + month + year + season, PM10Test)[, -1]
+y.Test = PM10Test$logPM10
+
+set.seed(1)
+pls.SWFoward = plsr(logPM10 ~ logCarNumbers + temp2m + windSpeed + windSpeedSqrt + windRose + day + month + year + season, data = PM10Train, scale = TRUE, validation = "CV")
+# summary(pls.SWFoward)
+
+validationplot(pls.SWFoward, val.type = "MSEP")
+
+
+
+pls.pred = predict(pls.SWFoward, newx = x, ncomp = 5)
+# calc RMSE
+sqrt(mean((pls.pred - y.Train)^2))
+analysisNumber = 12
+results$method[analysisNumber] = "Partial least squares regression"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "SWForward variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.71065
+```
+### Variable set chosen from earlier assessments. 
+
+The variables offered to the PLS algorithm were logCarNumbers, temp2m, windDirection, hourofDay, windSpeedSqrt, windRose, day, month and season. The PLSR model with three components had the lowest MSEP so this was applied to the test data set an gave a RMSE of 0.7025. 
+
+```{r echo=FALSE}
+## set up y variable and x matrix
+x.Train = model.matrix(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season, PM10Train)[, -1]
+y.Train = PM10Train$logPM10
+x.Test = model.matrix(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season, PM10Test)[, -1]
+y.Test = PM10Test$logPM10
+
+set.seed(1)
+pls.Chosen9 = plsr(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season, data = PM10Train, scale = TRUE, validation = "CV")
+# summary(pls.Chosen9)
+
+validationplot(pls.Chosen9, val.type = "MSEP")
+
+# minimum is at M = 3
+
+pls.pred = predict(pls.Chosen9, newx = x, ncomp = 3)
+# calc RMSE
+sqrt(mean((pls.pred - y.Train)^2))
+analysisNumber = 13
+results$method[analysisNumber] = "Partial least squares regression"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.70255
+```
+
+## Generalised Additive Models - GAM
+
+The above PLS models identified very little gain in RMSE from the different variable combinations.  As the GAM routine requires a lot of manual fitting to find the best model will only use the Chosen9 dataset in this section. Initially apply without smoothing splines and then with smoothing splines. The RMSE for these two variants were 0.8015 and 0.8185 respectively. 
+
+```{r echo=FALSE, warning=FALSE}
+gamchosen9 = lm(
+  logPM10 ~ ns(logCarNumbers, 4) + ns(temp2m, 4) + ns(windDirection, 4) + ns(windSpeedSqrt, 4)
+    + hourofDay + windRose + day + month + season,
+  data = PM10Train
+)
+
+Gam9.pred = predict(gamchosen9, newdata = PM10Test)
+sqrt(mean((Gam9.pred - y.Test)^2))
+analysisNumber = 14
+results$method[analysisNumber] = "GAM regression - normal Splines"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.8184
+
+## repeat with smooth splines
+
+gamchosen9s = lm(
+  logPM10 ~ s(logCarNumbers, 4) + s(temp2m, 4) + s(windDirection, 4) + s(windSpeedSqrt, 4)
+    + hourofDay + windRose + day + month + season,
+  data = PM10Train
+)
+
+Gam9.pred = predict(gamchosen9s, newdata = PM10Test)
+sqrt(mean((Gam9.pred - y.Test)^2))
+analysisNumber = 15
+results$method[analysisNumber] = "GAM regression - normal Splines"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.8185
+```
+
+Could redo the natural splines with differing numbers of variables and compare predictions using ANOVA but the 9 component model did not have a very good RMSE on the test set so little point and removing variables will not improve the RMSE.
+
+That completes the modelling of PM10 counts as a continuous (log transformed) variable Ridge, Lasso and PLS regression gave an improvement in RMSE over simple regressions but GAM did not give much improvement.
+
+## Categorical / dichotomous variable analysis
+
+If logPM10 is treated as a  dichotomous variable can then investigate the value of investigate algorithms such as logistic regression, clustering, SVM. Split will be if PM10 is above or below FAO(2020) guideline of 45 ug/cubic meter.First step required is to create a Category variable in all three data sets and convert this to a factor. 
+
+       High  Low
+   raw  130  370
+   
+   Train 61  185
+   
+   Test  69  185
+
+All three datasets have a 3:1 bias in favour of Low so may end up being better at predicting Low. Furthermore just classifying all predictions as Low will be correct in 75% of cases overall - but will have zero accuracy in predicting High observations which are probably of greater practical interest.
+
+```{r echo=FALSE, warning=FALSE}
+
+analysisNumber = 16
+results$method[analysisNumber] = "DICHOTOMOUS VARIABLE ANALYSIS"
+results$dataset[analysisNumber] = ""
+results$variableset[analysisNumber] = "" 
+results$assessment[analysisNumber] = "" 
+results$value[analysisNumber] = 0 
+
+PM10raw$PM10Category = rep("Low", 500)
+PM10raw$PM10Category[PM10raw$logPM10 > log(45)] = "High"
+table(PM10raw$PM10Category)
+
+PM10Test$PM10Category = rep("Low", 246)
+PM10Test$PM10Category[PM10Test$logPM10 > log(45)] = "High"
+table(PM10Test$PM10Category)
+
+PM10Train$PM10Category = rep("Low", 254)
+PM10Train$PM10Category[PM10Train$logPM10 > log(45)] = "High"
+table(PM10Train$PM10Category)
+
+#         High  Low
+#    raw  130  370
+#   Train 61  185
+#   Test  69  185
+
+# 
+
+## convert to factors with two levels
+
+PM10raw$PM10Category = factor(PM10raw$PM10Category)
+PM10Train$PM10Category = factor(PM10Train$PM10Category)
+PM10Test$PM10Category = factor(PM10Test$PM10Category)
+```
+## Logistic Regression 
+
+Explore some logistic regression models as initial EDA. Initially offer up all the possible variables. From this large model just pick out those variables with interesting p values (ie p<0.2) - avoid Type II errors - FOMO and then cross validate using the Test and training data sets.  The smaller model looks a better model as no variables with high p-values that just add noise. The plotted results for the initial model do not look impressive  - even on the training set! The confusion matrix is: 
+
+            High Low
+            
+  HighPred   44 156
+  
+  LowPred    17  29
+
+Only 29% of observations are predicted correctly but 44/(44+17) but 72% of High observations were correctly predicted. 
+
+```{r echo=FALSE, warning=FALSE}
+glm.LogistAll = glm(PM10Category ~ . - logPM10, data = PM10raw, family = binomial) ## must exclude logPM10
+# summary(glm.LogistAll)
+
+glm.LogistP5 = glm(PM10Category ~ logCarNumbers + windSpeedSqrt + day + temp2m + windRose, data = PM10raw, family = binomial)
+# summary(glm.LogistP5) # looks a better model as no variables with high p-values that just add noise
+
+## now apply to training set then test
+glm.LogistP5Train = glm(PM10Category ~ logCarNumbers + windSpeedSqrt + day + temp2m + windRose, data = PM10Train, family = binomial)
+
+# plot
+plot(glm.LogistP5Train$fitted.values, PM10Train$logPM10,
+  main = "Logistic regression p value against actual log10PM",
+  ylab = "logPM10 in TRAINING set",
+  xlab = "probability of high reading (>45) from model from training set"
+)
+
+# the initial model is hopeless - even on the training set!
+
+glm.pred = rep("LowPred", 254) ## create predicted value for Test set
+glm.pred[glm.LogistP5Train$fitted.values > .5] = "HighPred"
+table(glm.pred, PM10Train$PM10Category)
+# glm.pred   High Low
+# HighPred   51 171
+# LowPred    18  14
+# correct = (51+14) / 254 = 25%
+
+glm.probs = predict(glm.LogistP5Train, newdata = PM10Test, type = "response") ## why does this return a vector of length 254 - train set length
+
+
+glm.pred = rep("LowPred", 246) ## create predicted value for Test set
+glm.pred[glm.probs > .5] = "HighPred"
+table(glm.pred, PM10Test$PM10Category)
+(44+29)/246
+44/(44+17)
+
+analysisNumber = 17
+results$method[analysisNumber] = "Logistic regression - 0.5 cutoff"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "% Correct" 
+results$value[analysisNumber] = 29.7
+
+```
+
+Before we move on from Logistic regression will look at different probability cut-off points for defining 'High'
+
+Cut off 
+
+0.5         (58 + 0) / 246     23.5 %
+
+0.75          (11 + 72) / 246   33.7 %
+
+0.85          (5 + 72) / 246    31%
+
+None of these look materially better than just assuming it will always be Low which has a 100-26 = 74% success rate.   
+
+```{r echo=FALSE, warning=FALSE}
+glm.pred = rep("LowPred", 246) ## create predicted value for Test set
+glm.pred[glm.probs > .25] = "HighPred"
+table(glm.pred, PM10Test$PM10Category)
+
+# glm.pred   High Low
+# HighPred   58 185
+# LowPred     3   0   Almost everything classed as High
+
+(58 + 0) / 246 # 23.5 %
+
+glm.pred = rep("LowPred", 246) ## create predicted value for Test set
+glm.pred[glm.probs > .75] = "HighPred"
+table(glm.pred, PM10Test$PM10Category)
+
+# glm.pred   High Low
+# HighPred   11 113
+# LowPred    50  72
+
+(11 + 72) / 246 # 33.7 %
+
+analysisNumber = 18
+results$method[analysisNumber] = "Logistic regression - 0.75 cutoff"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "% Correct" 
+results$value[analysisNumber] = 33.7
+
+
+glm.pred = rep("LowPred", 246) ## create predicted value for Test set
+glm.pred[glm.probs > .85] = "HighPred"
+table(glm.pred, PM10Test$PM10Category)
+
+# glm.pred   High Low
+# HighPred    5  72
+# LowPred    56 113
+
+(5 + 72) / 246 ## 31%
+
+analysisNumber = 19
+results$method[analysisNumber] = "Logistic regression - 0.85 cutoff"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "% Correct" 
+results$value[analysisNumber] = 31.0
+
+## none of these look materially better than just assuming it will always be Low which has a 100-26 = 74% success rate
+
+```
+
+## Linear Discriminant Analysis (LDA) 
+
+A model offered all the possible variables showed too much co-linearity so have used a reduced variable set. Some separation can be seen and the predictive accuracy is 71% overall which is almost as good as assuming all are low! 29.5% (18 out of 61) High observations were predicted correctly.
+
+```{r echo=FALSE, warning=FALSE}
+set.seed(1)
+lda.trainp5 = lda(PM10Category ~ logCarNumbers + windSpeedSqrt + day + temp2m + windRose, data = PM10Train)
+# lda.trainp5
+plot(lda.trainp5)
+# can see some separation
+
+lda.probs = predict(lda.trainp5, newdata = PM10Test)
+
+names(lda.probs)
+
+lda.class = lda.probs$class
+table(lda.class, PM10Test$PM10Category)
+
+(18 + 157) / 246 # 71% - almost as good as assuming all are low
+
+analysisNumber = 20
+results$method[analysisNumber] = "Linear Discriminant Analysis (LDA)"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 6 variables" 
+results$assessment[analysisNumber] = "% Correct" 
+results$value[analysisNumber] = 71.0
+
+
+```
+
+## Quadratic Discriminant Analysis
+
+Used the same, chosen data set as in LDA. Again can see some separation - maybe a bit better but the classification is not as good - 65%
+
+```{r echo=FALSE, warning=FALSE}
+qda.trainp5 = qda(PM10Category ~ logCarNumbers + windSpeedSqrt + day + temp2m + windRose, data = PM10Train)
+#qda.trainp5
+
+# plot(qda.trainp5)
+# can see some separation - maybe a bit better - do not seem to be able to stack these with par(mfrow= c(1, 1)) or similar
+
+qda.probs = predict(qda.trainp5, newdata = PM10Test)
+
+#names(qda.probs)
+set.seed(1)
+qda.class = qda.probs$class
+
+table(qda.class, PM10Test$PM10Category)
+(29 + 132) / 246 # 65% - not as good as LDA
+analysisNumber = 21
+results$method[analysisNumber] = "Quadratic Discriminant Analysis (QDA)"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 5 variables" 
+results$assessment[analysisNumber] = "% Correct" 
+results$value[analysisNumber] = 65.0
+
+```
+
+## K-Nearest neighbours
+
+This section will use the smaller 'chosen' variable set and will iterate through a range of values for K. With the raw data the optimal k looks to be 5 where 71% of observations are correctly classified. Where the variables are standardised k rises to 10 and 75.6% of observations are correctly classified. 
+
+```{r echo=FALSE, warning=FALSE}
+train.x = cbind(PM10Train$logCarNumbers, PM10Train$windSpeedSqrt, PM10Train$day, PM10Train$temp2m, PM10Train$windRose)
+test.x = cbind(PM10Test$logCarNumbers, PM10Test$windSpeedSqrt, PM10Test$day, PM10Test$temp2m, PM10Test$windRose)
+train.y = PM10Train$PM10Category
+
+set.seed(1)
+knn.pred = knn(train.x, test.x, train.y, k = 5)
+# table(knn.pred, PM10Test$PM10Category)
+#(24 + 138) / 246 # 65% looks good but all=Low is 75% K = 1
+#(19 + 144) / 246 # 66% for K = 3
+#(20 + 154) / 246 # 70.7% for k = 5
+#(19 + 152) / 246 # 69.5 for k = 6
+#(19 + 155) / 246 # 70.7 for k = 7
+#(20 + 153) / 246 # 70.3 for k = 9
+#(18 + 152) / 246 # 69.1 for k = 11
+
+## K = 5 looks to be the best
+
+analysisNumber = 22
+results$method[analysisNumber] = "Best K-NN k = 5, raw data "
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 5 variables" 
+results$assessment[analysisNumber] = "% Correct" 
+results$value[analysisNumber] = 70.7
+
+
+# should we standardise the x data
+
+train.x = scale(cbind(PM10Train$logCarNumbers, PM10Train$windSpeedSqrt, PM10Train$day, PM10Train$temp2m, PM10Train$windRose))
+test.x = scale(cbind(PM10Test$logCarNumbers, PM10Test$windSpeedSqrt, PM10Test$day, PM10Test$temp2m, PM10Test$windRose))
+
+set.seed(1)
+knn.pred = knn(train.x, test.x, train.y, k = 10)
+# table(knn.pred, PM10Test$PM10Category)
+
+#(15 + 164) / 246 # 72.7 for k = 6
+#(15 + 162) / 246 # 71.9 for k = 5
+#(16 + 167) / 246 # 74.3 for k = 7
+#(11 + 173) / 246 # 74.7 for k = 9
+#(11 + 175) / 246 # 75.6 for k = 10
+#(11 + 174) / 246 # 75.2 for k = 11
+#(9 + 175) / 246 # 73.1 for k = 13
+
+analysisNumber = 23
+results$method[analysisNumber] = "Best K-NN k = 10, standardised variables "
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 5 variables" 
+results$assessment[analysisNumber] = "% Correct" 
+results$value[analysisNumber] = 75.6
+
+```
+
+
+
+## Decision trees
+
+```{r echo=FALSE, warning=FALSE}
+set.seed(1)
+## Everything
+tree.PM10TrainAll = tree(PM10Category ~ . - logPM10, data = PM10Train)
+# generates a warning message
+
+# summary(tree.PM10TrainAll)
+# uses 10 variables and mis classifies 8% so correctly classifies 92%
+
+# visualise
+par(mfrow = c(1, 1))
+plot(tree.PM10TrainAll,
+     main = "Tree when offering all variables to model")
+text(tree.PM10TrainAll, pretty = 0, cex = .6)
+
+# redo with selected variables
+
+tree.PM10TrainChosen = tree(PM10Category ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season, data = PM10Train)
+# no errors
+
+# summary(tree.PM10TrainChosen)
+# error rate 11%
+
+tree.PM10TrainSWForward = tree(PM10Category ~ logCarNumbers + temp2m + windSpeed + windSpeedSqrt + windRose + day + month + year + season, data = PM10Train)
+# no errors
+
+#summary(tree.PM10TrainSWForward)
+# error rate 13%
+
+# visualise
+par(mfrow = c(1, 1))
+plot(tree.PM10TrainSWForward)
+text(tree.PM10TrainSWForward, pretty = 0, cex = .6)
+## 
+
+tree.PM10TestChosen = predict(tree.PM10TrainChosen, PM10Test, type = "class")
+
+table(tree.PM10TestChosen, PM10Test$PM10Category)
+
+(22 + 140) / 246 # falls to 65%
+
+analysisNumber = 24
+results$method[analysisNumber] = "Decision Tree "
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "% Correct" 
+results$value[analysisNumber] = 65
+
+
+```
+
+The initial whole-set model uses 10 variables and mis-classifies 8% of observations. The Chosen variable set had a mis-classification rate of 11% and the SWForward set 13%. The latter looks a simpler tree and many of the branches are the same (Low and Low) so could be pruned. When applied to the Test dataset correct classifications falls to 65%. 
+
+Look at the effect of pruning on the 'Chosen' variable set. 8 or 11 looks to be optimal node count - parsimony suggests 8 as the gains are small. With 8 nodes 79.2% of observations are correctly classified, with 11 nodes this drops marginally to 78.8% on the Test datasets. The latter classifies more highs correctly (51 cf 49) so might be preferred.  
+
+```{r echo=FALSE, warning=FALSE}
+set.seed(1)
+# derive model with ALL of data
+tree.PM10Chosen = tree(PM10Category ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season, data = PM10raw)
+# no errors
+
+cv.PM10Chosen = cv.tree(tree.PM10Chosen, FUN = prune.misclass)
+
+# cv.PM10Chosen
+
+par(mfrow = c(1, 2))
+plot(cv.PM10Chosen$size, cv.PM10Chosen$dev,
+  type = "b",
+  pch = 16
+)
+plot(cv.PM10Chosen$k, cv.PM10Chosen$dev,
+  type = "b",
+  pch = 16
+)
+
+# 8 or 11 looks to be optimal node count - parsimony suggests 8 - the gains are small. 
+
+prune.PM10Chosen = prune.misclass(tree.PM10Chosen, best = 8)
+#par(mfrow = c(1, 1))
+#plot(prune.PM10Chosen)
+#text(prune.PM10Chosen, pretty = 0)
+
+tree.pred = predict(prune.PM10Chosen, PM10Test, type = "class")
+table(tree.pred, PM10Test$PM10Category)
+(49 + 146) / 246 # 79.2% on best = 8
+
+analysisNumber = 25
+results$method[analysisNumber] = "Decision Tree 8 nodes"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "% Correct" 
+results$value[analysisNumber] = 79.2
+
+# now use  11 nodes
+
+prune.PM10Chosen = prune.misclass(tree.PM10Chosen, best = 11)
+#par(mfrow = c(1, 1))
+#plot(prune.PM10Chosen)
+#text(prune.PM10Chosen, pretty = 0)
+
+tree.pred = predict(prune.PM10Chosen, PM10Test, type = "class")
+table(tree.pred, PM10Test$PM10Category)
+(51 + 143) / 246 # 78.8% on best = 11 but more Highs correct (51 cf 49) so might be preferred
+
+analysisNumber = 26
+results$method[analysisNumber] = "Decision Tree 8 nodes"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "% Correct" 
+results$value[analysisNumber] = 78.8
+
+```
+Can try creating a regression tree - bit hybrid as just chops up log10PM into sections. Using all variables gives an ugly tree and NA's have been introduced by coercion. Re-running the model  with just those variables used (see tree figure) avoids this warning. A plot of the gain in performance against tree structure shows the gains come early in the branching and a 'best' of 4 nodes was selected and the predicted logPM10 plotted against actual. This had a RMSE of 0.893 which is poorer than previous methods.  
+
+```{r echo=FALSE, warning=FALSE}
+set.seed(32) # different seeds give very different answers as to optimal node number
+
+tree.logPM10 = tree(logPM10 ~ ., PM10Train)
+# Warning NAs introduced
+# summary(tree.logPM10)
+
+## redo with just those variables used
+tree.logPM10 = tree(logPM10 ~ logCarNumbers + windSpeed + month + temp2mcf25m + windDirection + day, PM10Train)
+# no Warning
+# summary(tree.logPM10)
+
+plot(tree.logPM10)
+text(tree.logPM10, pretty = 0) # looks ugly
+
+cv.log10PM = cv.tree(tree.logPM10)
+plot(cv.log10PM$size, cv.log10PM$dev, type = "b")
+
+prune.logPM10 = prune.tree(tree.logPM10, best = 4)
+plot(prune.logPM10)
+text(prune.logPM10, pretty = 0)
+
+yhat = predict(tree.logPM10, newdata = PM10Test)
+plot(yhat, PM10Test$logPM10,
+  main = "Regression tree: prediction of logPM10",
+  ylab = "Actual logPM10",
+  xlab = "Predicted logPM10"
+)
+abline(0, 1)
+# rmse
+sqrt(mean((yhat - PM10Test$logPM10)^2))
+# RMSE = 0.893 so not as good as other methods
+analysisNumber = 27
+results$method[analysisNumber] = "Decision Tree 8 nodes - linear regression"
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.893
+
+```
+
+## Bagging 
+
+Again as there is some manual steering of parameters so will limit modelling to the Chosen9 and SWForward variable set. Initially, as EDA, just work with fairly standard forest size and mtry values. A plot of predicted against actual shows a decent relationship (which as usual gets clearer once the regression line is added) and an encouraging RMSE value of 0.7945. Next steps are to manually optimise tree numbers and mtry value. Model does not improve very much beyond a forest size of 100 trees. and this value is taken forward into an optimisation of mtry. The final optimised model has an RMSE of 0.768 which is a notable improvement over the initial RMSE obtained with bagging. The relative importance of each variable is ranked as expected with a fairly linear decline in importance with no obvious break point or 'elbow'.  
+
+* Trees = 25          RMSE = 0.840
+* Trees = 100         RMSE = 0.794
+* Trees = 500         RMSE = 0.7944
+* Trees = 1000        RMSE = 0.790
+
+* mtry = 1            RMSE = 0.768
+* mtry = 2            RMSE = 0.787
+* mtry = 3            RMSE = 0.780
+* mtry = 5            RMSE = 0.791
+* mtry = 8            RMSE = 0.800
+
+
+
+```{r echo=FALSE, warning=FALSE}
+
+set.seed(1)
+bag.chosen = randomForest(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season,
+  data = PM10Train,
+  mtry = 9,
+  importance = TRUE
+)
+
+# bag.chosen
+
+yhat = predict(bag.chosen, newdata = PM10Test)
+plot(yhat, PM10Test$logPM10)
+abline(0, 1)
+sqrt(mean((yhat - PM10Test$logPM10)^2)) # RMSE = 0.7944662
+
+# model optimised for forest size and mtry 
+
+set.seed(1)
+bag.chosen = randomForest(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season,
+  data = PM10Train,
+  mtry = 1,
+  ntree = 100,
+  importance = TRUE
+)
+
+yhat = predict(bag.chosen, newdata = PM10Test)
+sqrt(mean((yhat - PM10Test$logPM10)^2))
+
+analysisNumber = 28
+results$method[analysisNumber] = "Bagging - optimised "
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.7683
+
+# importance(bag.chosen)
+
+varImpPlot(bag.chosen)
+
+```
+
+Repeating the modelling with the SWForward variable set yields a model with an optimal forest size of 150 trees and an mtry of 2. The best model has an similar RMSE 0.7498 and a very similar pattern of variable importance.  
+
+```{r echo=FALSE, warning=FALSE}
+set.seed(1)
+bag.SWForward = randomForest(logPM10 ~ logCarNumbers + temp2m + windSpeed + windSpeedSqrt + windRose + day + month + year + season,
+  data = PM10Train,
+  mtry = 2,
+  ntree = 150,
+  importance = TRUE
+)
+
+# bag.SWForward
+
+yhat = predict(bag.SWForward, newdata = PM10Test)
+plot(yhat, PM10Test$logPM10)
+abline(0, 1)
+sqrt(mean((yhat - PM10Test$logPM10)^2)) # RMSE = 0.805 - better
+
+# Trees = 10  RMSE = 0.8507
+# Trees = 25  RMSE = 0.8507
+# Trees = 50  RMSE = 0.8141
+# Trees = 100  RMSE = 0.8073
+# Trees = 150  RMSE = 0.8068 # looks to be a minima  here
+# Trees = 200  RMSE = 0.8077
+# Trees = 500  RMSE = 0.80508
+# Trees = 1000  RMSE = 0.8048
+# Trees = 2000  RMSE = 0.8059
+
+# now optimise on mtry
+
+# mtry = 1 RMSE = 0.755
+# mtry = 2 RMSE = 0.7497 # looks to be a minima  here
+# mtry = 3 RMSE = 0.7537
+# mtry = 5 RMSE = 0.7756
+# mtry = 8 RMSE = 0.8041
+
+# importance(bag.SWForward)
+
+varImpPlot(bag.SWForward) # very similar performance and ranking
+
+analysisNumber = 29
+results$method[analysisNumber] = "Bagging - optimised "
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "SW Forward variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.7796
+
+
+```
+
+## Boosting 
+
+Will run a similar optimisation and comparison. The optimum looks to be 20 tress and an interaction depth of 4. The ranking of the importance of the variables is similar to previous results as is the plot of actual and predicted values as is the final RMSE at 0.7453.   
+
+
+```{r echo=FALSE, warning=FALSE}
+set.seed(1)
+boost.chosen = gbm(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season,
+  data = PM10Train,
+  distribution = "gaussian", n.trees = 20,
+  interaction.depth = 4
+)
+# summary(boost.chosen)
+
+yhat = predict(boost.chosen, newdata = PM10Test)
+plot(yhat, PM10Test$logPM10)
+abline(0, 1)
+sqrt(mean((yhat - PM10Test$logPM10)^2)) # RMSE = 0.8956
+
+# Trees = 5000  RMSE = 0.8956
+# Trees = 2000  RMSE = 0.8908
+# Trees = 1000  RMSE = 0.8755
+# Trees = 500  RMSE = 0.8387
+# Trees = 200  RMSE = 0.8095
+# Trees = 100  RMSE = 0.7940
+# Trees = 50  RMSE = 0.7662
+# Trees = 20  RMSE = 0.7453
+# Trees = 10  RMSE = 0.7687
+
+# Depth = 2 RMSE = 0.7961
+# Depth = 2 RMSE = 0.7856
+# Depth = 4 RMSE = 0.7687 - elbow here
+# Depth = 8 RMSE = 0.7656
+# Depth = 16 RMSE = 0.7642
+# Depth = 32 RMSE = 0.7642
+
+
+analysisNumber = 30
+results$method[analysisNumber] = "Boosting - optimised "
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.7687
+
+```
+
+## Bayesian additive reg trees
+
+BART was run on the Chosen9 variable set and the best model identified. The plot of actual and predicted was similar as was the RMSE 0.7453.  
+
+```{r echo=FALSE, warning=FALSE}
+
+x.Train = model.matrix(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season, PM10Train)[, -1]
+y.Train = PM10Train$logPM10
+x.Test = model.matrix(logPM10 ~ logCarNumbers + temp2m + windDirection + hourofDay + windSpeedSqrt + windRose + day + month + season, PM10Test)[, -1]
+y.Test = PM10Test$logPM10
+
+set.seed(1)
+bartfit = gbart(x.Train, y.Train, x.test = x.Test)
+
+# compute the test error
+yhat.bart = bartfit$yhat.test.mean
+sqrt(mean((y.Test - yhat.bart)^2))  # RMSE = 0.7687 - not quite as good as other methods
+
+analysisNumber = 31
+results$method[analysisNumber] = "BART - optimised "
+results$dataset[analysisNumber] = "Test data"
+results$variableset[analysisNumber] = "Chosen 9 variables" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.7687
+```
+
+# Is Time Series Analysis a valid approach?  
+
+As mentioned earlier the data are extracted from  a time series - if the intervals between observations are approx constant then could look at simple Time series analyses: so some EDA was carried out to explore this option. Data are available over two winters and look to have data across the entire 24 hour day. First step is to construct a time stamp for each observation then look at the sampling intervals we have. The median sampling interval is 5 with an IQR from 2 to 12. This is a narrow enough range that time series analysis may be worth exploring. A new variable was created being the difference in logPM10 at time(t) and time(t-1). When logPM10 at time(t-1) is regressed against time(t) a relationship can be seen which is significant (p<0.001) but only accounts for 11% of the variation. The RMSE is 0.832.  
+
+
+
+```{r echo=FALSE, warning=FALSE}
+
+# hist(PM10raw$dayNumber)
+## data available are from two winters 
+hist(PM10raw$hourofDay)
+## look to have data across the entire day 
+
+## need to construct a time stamp then look at the intervals  so can carry out some Time Series EDA
+
+# check help 
+#help(DateTimeClasses)
+#help("difftime")
+
+# check intial data 
+#head(PM10raw$dayDate)
+
+# convert to date stamp
+PM10raw$dayDateStamp = as.POSIXct(PM10raw$dayDate)
+# add on the hour 
+PM10raw$dayDateStamp = PM10raw$dayDateStamp + (PM10raw$hourofDay*60*60) 
+# check 
+#head(PM10raw$dayDateStamp)
+#class(PM10raw$dayDateStamp)
+
+
+PM10Sorted = PM10raw[order(PM10raw$dayDateStamp),]
+
+# calculate interval since the last observation
+for (i in 2:500) {
+  PM10Sorted$timeInterval[i] = ((PM10Sorted$dayDateStamp[i]) - (PM10Sorted$dayDateStamp[i-1]))
+}
+
+# 1st obs will be wrong as not calculated 
+PM10Sorted$timeInterval[1] = 0 
+
+
+# head(PM10Sorted$timeInterval)
+hist(PM10Sorted$timeInterval, breaks = 20)
+# summary(PM10Sorted$timeInterval)
+# most of the time intervals are below 20 mins - Q3 is 12 mins so COULD look at time series 
+
+# create the prev logPM10
+for (i in 2:500) {
+  PM10Sorted$prevlogPM10[i] = PM10Sorted$logPM10[i-1]
+}
+# fudge the first reading 
+PM10Sorted$prevlogPM10[1] = PM10Sorted$logPM10[1]
+
+cor (PM10Sorted$logPM10, PM10Sorted$prevlogPM10)
+
+lm.fitTS = lm(PM10Sorted$logPM10 ~ PM10Sorted$prevlogPM10, data = PM10Sorted)
+# summary(lm.fitTS)
+rmse(PM10Sorted$logPM10, lm.fitTS$fitted.values)
+
+plot(PM10Sorted$prevlogPM10, PM10Sorted$logPM10, 
+     main = "Time Series EDA",
+     ylab = "log(PM10) at time t",
+     xlab = "log(PM10) at time t-1", 
+     sub = "Regression, p<0.0001, adjR2 = 11%, RMSE = 0.832"
+)
+abline(lm.fitTS, lty = 1, col = "blue", lwd = 3)
+
+analysisNumber = 32
+results$method[analysisNumber] = "Time series - one step ahead"
+results$dataset[analysisNumber] = "All data"
+results$variableset[analysisNumber] = "logPM10 at t-1" 
+results$assessment[analysisNumber] = "RMSE" 
+results$value[analysisNumber] = 0.8329
+
+## Looks like its not a bad model but only predicts one period ahead!
+
+
+```
+
+
+
+# Results 
+
+The table below below summerises the various analyses and tests performed detailing the statistical method and the data and variable sets used in each analysis. Performance is assessed using the RMSE when logPM10 is treated as a continuous variable and overall percent correct when logPM10 is treated as a dichotomous variable with the break at 45 micrograms. 
+
+```{r echo=FALSE}
+
+knitr::kable(results[0:32,1:5], "simple")
+
+
+```
+
+
+# Discussion 
+
+## Data interpretation. 
+
+The PM10 data is expressed on the natural log scale such that a one unit change is a 2.7 fold increase. 
+
+The IQR for logPM10 is 1.17 and the average RMSE across all the tests performed was 0.810 such that the average RSME is 69% of the IQR or more than a doubling of the PM10 value. Such large errors will make any predictive test of limited value. 
+
+When considering the dichotomous predictors it should be noted that 75% of the observations were for a low reading (under 45) so just assuming all predictions would be for a 'Low' concentration would be correct 75% of the time. Against this the percent correctly assigned is not impressive. However there was some evidence that the ability to predict 'High' was better than just random chance. 
+
+The original paper (Aldrin and Haff, 2005) used Generalised Additive Modelling (GAM) but they explored the techniques performance more than its predictive ability. It is interesting to note that the 'best' test method (Ridge Regression) performed considerably better than GAM (RMSE 0.6994 cf 0.8184) and many of the tests (12/21 57%) assessed performed better than the GAM method. 
+
+## Why did the tests have low predictive ability 
+
+PM10 is made up of smaller particles (PM25) and larger particles (Segersson et al, 2017). The smaller particles tend to come from fuel burning whereas the larger ones from vehicle traffic. The parameters available to include in these models largely related to roads and vehicle traffic and did not pick up variables that might have been associated with fuel burning (house density, use of open fires etc). This inability to capture all the relevant variables may account for the poor predictive ability. The original authors also noted that snow cover could act as a buffer for PM material trapping particles as it fell and releasing them as it melted - we did not have any snow cover data available. 
+
+The data set available was from one of four sites around Oslo that were originally surveyed. Looking at Google Maps the site for which we had data was very industrial and bounded to the NW by a large rail marshaling yard. It is unlikely that predictions made from data for the one site would extrapolate successfully to the other, more residential, sites.    
+
+
+# Conclusion 
+
+A wide range of modern statistical data learning techniques have been applied to a sample of data from an original study on particulate matter pollution (Aldrin and Haff, 2005). For a range of reasons the predictive capacity of these models is such that they will be of very limited applied use. The full data set were collected over sequential days and hours so incorporating and element of time series analysis (such as the logPM10 count at same time of previous day) may well improve the predictive ability.    
+
+# References
+
+
+Aldrin M. and Haff I.H. (2005) Generalised Additive Modelling of air pollution, traffic volume and meteorology. Atmospheric Environment 39, 2145-2155   
+
+James G, Witten D, Hastie T. and Tibshirani R (2021) An introduction to Statistical Learning. 2nd Ed. 607 pp. Pubs Springer.
+
+Segersson D, Eneroth K,  Gidhagen L, Johansson C, Omstedt G, Nylén A Forsberg B. (2017) Health Impact of PM10, PM2.5 and Black Carbon Exposure Due to Different Source Sectors in Stockholm, Gothenburg and Umea, Sweden. Int. J. Environ. Res. Public Health 2017, 14, 742
+
+Sparapani, R., Spanbauer, C., & McCulloch, R. (2021). Nonparametric Machine Learning and Efficient Computation with Bayesian Additive Regression Trees: The BART R Package. Journal of Statistical Software, 97(1), 1–66. https://doi.org/10.18637/jss.v097.i01 Accessed 15Oct22
+
+WHO (2021) https://www.who.int/news-room/fact-sheets/detail/ambient-(outdoor)-air-quality-and-health. Accessed 24Oct22
+
